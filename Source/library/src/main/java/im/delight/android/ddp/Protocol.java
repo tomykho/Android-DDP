@@ -16,7 +16,7 @@ package im.delight.android.ddp;
  * limitations under the License.
  */
 
-import org.codehaus.jackson.JsonNode;
+import com.google.gson.JsonObject;
 
 /** Constants used in the Distributed Data Protocol (DDP) */
 public class Protocol {
@@ -79,19 +79,10 @@ public class Protocol {
 			mDetails = details;
 		}
 
-		public static Error fromJson(final JsonNode json) {
+		public static Error fromJson(final JsonObject json) {
 			final String error;
 			if (json.has(Protocol.Field.ERROR)) {
-				final JsonNode errorJson = json.get(Protocol.Field.ERROR);
-				if (errorJson.isTextual()) {
-					error = errorJson.getTextValue();
-				}
-				else if (errorJson.isNumber()) {
-					error = errorJson.getNumberValue().toString();
-				}
-				else {
-					throw new IllegalArgumentException("Unexpected data type of error.error");
-				}
+				error = json.get(Protocol.Field.ERROR).getAsString();
 			}
 			else {
 				error = null;
@@ -99,7 +90,7 @@ public class Protocol {
 
 			final String reason;
 			if (json.has(Protocol.Field.REASON)) {
-				reason = json.get(Protocol.Field.REASON).getTextValue();
+				reason = json.get(Protocol.Field.REASON).getAsString();
 			}
 			else {
 				reason = null;
@@ -107,7 +98,7 @@ public class Protocol {
 
 			final String details;
 			if (json.has(Protocol.Field.DETAILS)) {
-				details = json.get(Protocol.Field.DETAILS).getTextValue();
+				details = json.get(Protocol.Field.DETAILS).getAsString();
 			}
 			else {
 				details = null;

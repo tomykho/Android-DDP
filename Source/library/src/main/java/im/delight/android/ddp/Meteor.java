@@ -16,10 +16,13 @@ package im.delight.android.ddp;
  * limitations under the License.
  */
 
-import im.delight.android.ddp.db.DataStore;
-import im.delight.android.ddp.db.Database;
-import android.content.SharedPreferences;
 import android.content.Context;
+import android.content.SharedPreferences;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.neovisionaries.ws.client.WebSocket;
 import com.neovisionaries.ws.client.WebSocketAdapter;
 import com.neovisionaries.ws.client.WebSocketException;
@@ -27,18 +30,18 @@ import com.neovisionaries.ws.client.WebSocketFactory;
 import com.neovisionaries.ws.client.WebSocketFrame;
 import com.neovisionaries.ws.client.WebSocketListener;
 import com.neovisionaries.ws.client.WebSocketState;
-import java.util.List;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.Queue;
-import java.util.Iterator;
-import org.codehaus.jackson.map.ObjectMapper;
-import java.util.UUID;
-import java.util.Arrays;
+
 import java.io.IOException;
-import org.codehaus.jackson.JsonProcessingException;
-import org.codehaus.jackson.JsonNode;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Queue;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentLinkedQueue;
+
+import im.delight.android.ddp.db.DataStore;
+import im.delight.android.ddp.db.Database;
 
 /** Client that connects to Meteor servers implementing the DDP protocol */
 public class Meteor {
@@ -48,10 +51,18 @@ public class Meteor {
 	private static final String[] SUPPORTED_DDP_VERSIONS = { "1", "pre2", "pre1" };
 	/** The maximum number of attempts to re-connect to the server over WebSocket */
 	private static final int RECONNECT_ATTEMPTS_MAX = 5;
-	/** Instance of Jackson library's ObjectMapper that converts between JSON and Java objects (POJOs) */
-	private static final ObjectMapper mObjectMapper = new ObjectMapper();
-	/** The WebSocket connection that will be used for the data transfer */
-	private WebSocket mWebSocket;
+	/**
+	 * Instance of Gson that converts between JSON and Java objects (POJOs)
+	 */
+	private static final Gson mGson = new Gson();
+	/**
+	 * Whether logging should be enabled or not
+	 */
+	private static boolean mLoggingEnabled;
+	/**
+	 * The callbacks that will handle events and receive messages from this client
+	 */
+	protected final CallbackProxy mCallbackProxy = new CallbackProxy();
 	/** The callback that handles messages and events received from the WebSocket connection */
 	private final WebSocketListener mWebSocketListener;
 	/** Map that tracks all pending Listener instances */
@@ -59,18 +70,16 @@ public class Meteor {
 	/** Messages that couldn't be dispatched yet and thus had to be queued */
 	private final Queue<String> mQueuedMessages;
 	private final Context mContext;
-	/** Whether logging should be enabled or not */
-	private static boolean mLoggingEnabled;
+	private final DataStore mDataStore;
+	/** The WebSocket connection that will be used for the data transfer */
+	private WebSocket mWebSocket;
 	private String mServerUri;
 	private String mDdpVersion;
 	/** The number of unsuccessful attempts to re-connect in sequence */
 	private int mReconnectAttempts;
-	/** The callbacks that will handle events and receive messages from this client */
-	protected final CallbackProxy mCallbackProxy = new CallbackProxy();
 	private String mSessionID;
 	private boolean mConnected;
 	private String mLoggedInUserId;
-	private final DataStore mDataStore;
 
 	/**
 	 * Returns a new instance for a client connecting to a server via DDP over websocket
@@ -211,6 +220,64 @@ public class Meteor {
 
 		// count the number of failed attempts to re-connect
 		mReconnectAttempts = 0;
+	}
+
+	/**
+	 * Returns whether the given JSON result is from a previous login attempt
+	 *
+	 * @param result the JSON result
+	 * @return whether the result is from a login attempt (`true`) or not (`false`)
+	 */
+	private static boolean isLoginResult(final JsonObject result) {
+		return result.has(Protocol.Field.TOKEN) && result.has(Protocol.Field.ID);
+	}
+
+	/**
+	 * Returns whether the specified version of the DDP protocol is supported or not
+	 *
+	 * @param protocolVersion the DDP protocol version
+	 * @return whether the version is supported or not
+	 */
+	public static boolean isVersionSupported(final String protocolVersion) {
+		return Arrays.asList(SUPPORTED_DDP_VERSIONS).contains(protocolVersion);
+	}
+
+	/**
+	 * Sets whether logging of internal events and data flow should be enabled for this library
+	 *
+	 * @param enabled whether logging should be enabled (`true`) or not (`false`)
+	 */
+	public static void setLoggingEnabled(final boolean enabled) {
+		mLoggingEnabled = enabled;
+	}
+
+	/**
+	 * Logs a message if logging has been enabled
+	 *
+	 * @param message the message to log
+	 */
+	public static void log(final String message) {
+		if (mLoggingEnabled) {
+			System.out.println(message);
+		}
+	}
+
+	/**
+	 * Creates and returns a new unique ID
+	 *
+	 * @return the new unique ID
+	 */
+	public static String uniqueID() {
+		return UUID.randomUUID().toString();
+	}
+
+	/**
+	 * Creates an empty map for use as default parameter
+	 *
+	 * @return an empty map
+	 */
+	private static Map<String, Object> emptyMap() {
+		return new HashMap<String, Object>();
 	}
 
 	/** Attempts to establish the connection to the server */
@@ -375,7 +442,7 @@ public class Meteor {
 	 */
 	private String toJson(Object obj) {
 		try {
-			return mObjectMapper.writeValueAsString(obj);
+			return mGson.toJson(obj);
 		}
 		catch (Exception e) {
 			mCallbackProxy.onException(e);
@@ -387,9 +454,7 @@ public class Meteor {
 	private <T> T fromJson(final String json, final Class<T> targetType) {
 		try {
 			if (json != null) {
-				final JsonNode jsonNode = mObjectMapper.readTree(json);
-
-				return mObjectMapper.convertValue(jsonNode, targetType);
+				return mGson.fromJson(json, targetType);
 			}
 			else {
 				return null;
@@ -408,29 +473,14 @@ public class Meteor {
 	 * @param payload the JSON payload to process
 	 */
 	private void handleMessage(final String payload) {
-		final JsonNode data;
-
-		try {
-			data = mObjectMapper.readTree(payload);
-		}
-		catch (JsonProcessingException e) {
-			mCallbackProxy.onException(e);
-
-			return;
-		}
-		catch (IOException e) {
-			mCallbackProxy.onException(e);
-
-			return;
-		}
-
+		final JsonObject data = mGson.fromJson(payload, JsonObject.class);
 		if (data != null) {
 			if (data.has(Protocol.Field.MESSAGE)) {
-				final String message = data.get(Protocol.Field.MESSAGE).getTextValue();
+				final String message = data.get(Protocol.Field.MESSAGE).getAsString();
 
 				if (message.equals(Protocol.Message.CONNECTED)) {
 					if (data.has(Protocol.Field.SESSION)) {
-						mSessionID = data.get(Protocol.Field.SESSION).getTextValue();
+						mSessionID = data.get(Protocol.Field.SESSION).getAsString();
 					}
 
 					// initialize the new session
@@ -439,7 +489,7 @@ public class Meteor {
 				else if (message.equals(Protocol.Message.FAILED)) {
 					if (data.has(Protocol.Field.VERSION)) {
 						// the server wants to use a different protocol version
-						final String desiredVersion = data.get(Protocol.Field.VERSION).getTextValue();
+						final String desiredVersion = data.get(Protocol.Field.VERSION).getAsString();
 
 						// if the protocol version that was requested by the server is supported by this client
 						if (isVersionSupported(desiredVersion)) {
@@ -452,12 +502,11 @@ public class Meteor {
 							throw new RuntimeException("Protocol version not supported: "+desiredVersion);
 						}
 					}
-				}
-				else if (message.equals(Protocol.Message.PING)) {
+				} else if (message.equals(Protocol.Message.PING)) {
 					final String id;
 
 					if (data.has(Protocol.Field.ID)) {
-						id = data.get(Protocol.Field.ID).getTextValue();
+						id = data.get(Protocol.Field.ID).getAsString();
 					}
 					else {
 						id = null;
@@ -469,7 +518,7 @@ public class Meteor {
 					final String documentID;
 
 					if (data.has(Protocol.Field.ID)) {
-						documentID = data.get(Protocol.Field.ID).getTextValue();
+						documentID = data.get(Protocol.Field.ID).getAsString();
 					}
 					else {
 						documentID = null;
@@ -478,7 +527,7 @@ public class Meteor {
 					final String collectionName;
 
 					if (data.has(Protocol.Field.COLLECTION)) {
-						collectionName = data.get(Protocol.Field.COLLECTION).getTextValue();
+						collectionName = data.get(Protocol.Field.COLLECTION).getAsString();
 					}
 					else {
 						collectionName = null;
@@ -503,7 +552,7 @@ public class Meteor {
 					final String documentID;
 
 					if (data.has(Protocol.Field.ID)) {
-						documentID = data.get(Protocol.Field.ID).getTextValue();
+						documentID = data.get(Protocol.Field.ID).getAsString();
 					}
 					else {
 						documentID = null;
@@ -512,7 +561,7 @@ public class Meteor {
 					final String collectionName;
 
 					if (data.has(Protocol.Field.COLLECTION)) {
-						collectionName = data.get(Protocol.Field.COLLECTION).getTextValue();
+						collectionName = data.get(Protocol.Field.COLLECTION).getAsString();
 					}
 					else {
 						collectionName = null;
@@ -546,7 +595,7 @@ public class Meteor {
 					final String documentID;
 
 					if (data.has(Protocol.Field.ID)) {
-						documentID = data.get(Protocol.Field.ID).getTextValue();
+						documentID = data.get(Protocol.Field.ID).getAsString();
 					}
 					else {
 						documentID = null;
@@ -555,7 +604,7 @@ public class Meteor {
 					final String collectionName;
 
 					if (data.has(Protocol.Field.COLLECTION)) {
-						collectionName = data.get(Protocol.Field.COLLECTION).getTextValue();
+						collectionName = data.get(Protocol.Field.COLLECTION).getAsString();
 					}
 					else {
 						collectionName = null;
@@ -570,23 +619,23 @@ public class Meteor {
 				else if (message.equals(Protocol.Message.RESULT)) {
 					// check if we have to process any result data internally
 					if (data.has(Protocol.Field.RESULT)) {
-						final JsonNode resultData = data.get(Protocol.Field.RESULT);
+						final JsonObject resultData = data.getAsJsonObject(Protocol.Field.RESULT);
 
 						// if the result is from a previous login attempt
 						if (isLoginResult(resultData)) {
 							// extract the login token for subsequent automatic re-login
-							final String loginToken = resultData.get(Protocol.Field.TOKEN).getTextValue();
+							final String loginToken = resultData.get(Protocol.Field.TOKEN).getAsString();
 							saveLoginToken(loginToken);
 
 							// extract the user's ID
-							mLoggedInUserId = resultData.get(Protocol.Field.ID).getTextValue();
+							mLoggedInUserId = resultData.get(Protocol.Field.ID).getAsString();
 						}
 					}
 
 					final String id;
 
 					if (data.has(Protocol.Field.ID)) {
-						id = data.get(Protocol.Field.ID).getTextValue();
+						id = data.get(Protocol.Field.ID).getAsString();
 					}
 					else {
 						id = null;
@@ -601,30 +650,24 @@ public class Meteor {
 
 						if (data.has(Protocol.Field.RESULT)) {
 							result = data.get(Protocol.Field.RESULT).toString();
-						}
-						else {
+						} else {
 							result = null;
 						}
 
 						if (data.has(Protocol.Field.ERROR)) {
-							final Protocol.Error error = Protocol.Error.fromJson(data.get(Protocol.Field.ERROR));
+							final Protocol.Error error = Protocol.Error.fromJson(data.getAsJsonObject(Protocol.Field.ERROR));
 							mCallbackProxy.forResultListener((ResultListener) listener).onError(error.getError(), error.getReason(), error.getDetails());
 						}
 						else {
 							mCallbackProxy.forResultListener((ResultListener) listener).onSuccess(result);
 						}
 					}
-				}
-				else if (message.equals(Protocol.Message.READY)) {
+				} else if (message.equals(Protocol.Message.READY)) {
 					if (data.has(Protocol.Field.SUBS)) {
-						final Iterator<JsonNode> elements = data.get(Protocol.Field.SUBS).getElements();
-						String subscriptionId;
-
-						while (elements.hasNext()) {
-							subscriptionId = elements.next().getTextValue();
-
+						final JsonArray subs = data.getAsJsonArray(Protocol.Field.SUBS);
+						for (JsonElement sub : subs) {
+							String subscriptionId = sub.getAsString();
 							final Listener listener = mListeners.get(subscriptionId);
-
 							if (listener instanceof SubscribeListener) {
 								mListeners.remove(subscriptionId);
 
@@ -637,7 +680,7 @@ public class Meteor {
 					final String subscriptionId;
 
 					if (data.has(Protocol.Field.ID)) {
-						subscriptionId = data.get(Protocol.Field.ID).getTextValue();
+						subscriptionId = data.get(Protocol.Field.ID).getAsString();
 					}
 					else {
 						subscriptionId = null;
@@ -649,7 +692,7 @@ public class Meteor {
 						mListeners.remove(subscriptionId);
 
 						if (data.has(Protocol.Field.ERROR)) {
-							final Protocol.Error error = Protocol.Error.fromJson(data.get(Protocol.Field.ERROR));
+							final Protocol.Error error = Protocol.Error.fromJson(data.getAsJsonObject(Protocol.Field.ERROR));
 							mCallbackProxy.forSubscribeListener((SubscribeListener) listener).onError(error.getError(), error.getReason(), error.getDetails());
 						}
 						else {
@@ -664,16 +707,6 @@ public class Meteor {
 				}
 			}
 		}
-	}
-
-	/**
-	 * Returns whether the given JSON result is from a previous login attempt
-	 *
-	 * @param result the JSON result
-	 * @return whether the result is from a login attempt (`true`) or not (`false`)
-	 */
-	private static boolean isLoginResult(final JsonNode result) {
-		return result.has(Protocol.Field.TOKEN) && result.has(Protocol.Field.ID);
 	}
 
 	/**
@@ -695,16 +728,6 @@ public class Meteor {
 	}
 
 	/**
-	 * Returns whether the specified version of the DDP protocol is supported or not
-	 *
-	 * @param protocolVersion the DDP protocol version
-	 * @return whether the version is supported or not
-	 */
-	public static boolean isVersionSupported(final String protocolVersion) {
-		return Arrays.asList(SUPPORTED_DDP_VERSIONS).contains(protocolVersion);
-	}
-
-	/**
 	 * Sends a `pong` over the websocket as a reply to an incoming `ping`
 	 *
 	 * @param id the ID extracted from the `ping` or `null`
@@ -719,35 +742,6 @@ public class Meteor {
 		}
 
 		send(data);
-	}
-
-	/**
-	 * Sets whether logging of internal events and data flow should be enabled for this library
-	 *
-	 * @param enabled whether logging should be enabled (`true`) or not (`false`)
-	 */
-	public static void setLoggingEnabled(final boolean enabled) {
-		mLoggingEnabled = enabled;
-	}
-
-	/**
-	 * Logs a message if logging has been enabled
-	 *
-	 * @param message the message to log
-	 */
-	public static void log(final String message) {
-		if (mLoggingEnabled) {
-			System.out.println(message);
-		}
-	}
-
-	/**
-	 * Creates and returns a new unique ID
-	 *
-	 * @return the new unique ID
-	 */
-	public static String uniqueID() {
-		return UUID.randomUUID().toString();
 	}
 
 	/**
@@ -1158,15 +1152,6 @@ public class Meteor {
 		data.put(Protocol.Field.ID, subscriptionId);
 
 		send(data);
-	}
-
-	/**
-	 * Creates an empty map for use as default parameter
-	 *
-	 * @return an empty map
-	 */
-	private static Map<String, Object> emptyMap() {
-		return new HashMap<String, Object>();
 	}
 
 	/**
