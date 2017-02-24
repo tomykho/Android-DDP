@@ -1,4 +1,4 @@
-# Android-DDP (GSON)
+# Android-DDP
 
 This library implements the [Distributed Data Protocol](https://www.meteor.com/ddp) (DDP) from Meteor for clients on Android.
 
@@ -442,14 +442,12 @@ All contributions are welcome! If you wish to contribute, please create an issue
 
 ## Dependencies
 
- * [nv-websocket-client](https://github.com/TakahikoKawasaki/nv-websocket-client) — [Takahiko Kawasaki](https://github.com/TakahikoKawasaki) — [Apache License 2.0](http://www.apache.org/licenses/LICENSE-2.0.html)
- * [Jackson Core](https://github.com/FasterXML/jackson-core) — [FasterXML](https://github.com/FasterXML) — [Apache License 2.0](http://www.apache.org/licenses/LICENSE-2.0.html)
- * [Jackson ObjectMapper](https://github.com/FasterXML/jackson-databind) — [FasterXML](https://github.com/FasterXML) — [Apache License 2.0](http://www.apache.org/licenses/LICENSE-2.0.html)
+ * [GSON](https://github.com/google/gson) — [Google](https://github.com/google) — [Apache License 2.0](http://www.apache.org/licenses/LICENSE-2.0.html)
+ * [OkHttp](https://github.com/square/okhttp) — [Square](https://github.com/square) — [Apache License 2.0](http://www.apache.org/licenses/LICENSE-2.0.html)
 
 ## Further reading
 
  * [DDP — Specification](https://github.com/meteor/meteor/blob/devel/packages/ddp/DDP.md)
- * [Jackson — Documentation](http://wiki.fasterxml.com/JacksonDocumentation)
 
 ## Disclaimer
 
