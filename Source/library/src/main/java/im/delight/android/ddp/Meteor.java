@@ -23,25 +23,22 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.neovisionaries.ws.client.WebSocket;
-import com.neovisionaries.ws.client.WebSocketAdapter;
-import com.neovisionaries.ws.client.WebSocketException;
-import com.neovisionaries.ws.client.WebSocketFactory;
-import com.neovisionaries.ws.client.WebSocketFrame;
-import com.neovisionaries.ws.client.WebSocketListener;
-import com.neovisionaries.ws.client.WebSocketState;
 
-import java.io.IOException;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 
 import im.delight.android.ddp.db.DataStore;
 import im.delight.android.ddp.db.Database;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.WebSocket;
+import okhttp3.WebSocketListener;
 
 /** Client that connects to Meteor servers implementing the DDP protocol */
 public class Meteor {
@@ -144,11 +141,10 @@ public class Meteor {
 		// save the data store reference
 		mDataStore = dataStore;
 
-		// create a new handler that processes the messages and events received from the WebSocket connection
-		mWebSocketListener = new WebSocketAdapter() {
-
+		mWebSocketListener = new WebSocketListener() {
 			@Override
-			public void onConnected(final WebSocket websocket, final Map<String, List<String>> headers) {
+			public void onOpen(WebSocket webSocket, Response response) {
+				super.onOpen(webSocket, response);
 				log(TAG);
 				log("  onOpen");
 
@@ -159,7 +155,23 @@ public class Meteor {
 			}
 
 			@Override
-			public void onDisconnected(final WebSocket websocket, final WebSocketFrame serverCloseFrame, final WebSocketFrame clientCloseFrame, final boolean closedByServer) {
+			public void onMessage(WebSocket webSocket, String text) {
+				super.onMessage(webSocket, text);
+				log(TAG);
+				log("  onTextMessage");
+				log("    payload == " + text);
+
+				handleMessage(text);
+			}
+
+			@Override
+			public void onClosing(WebSocket webSocket, int code, String reason) {
+				super.onClosing(webSocket, code, reason);
+			}
+
+			@Override
+			public void onClosed(WebSocket webSocket, int code, String reason) {
+				super.onClosed(webSocket, code, reason);
 				log(TAG);
 				log("  onClose");
 
@@ -183,27 +195,10 @@ public class Meteor {
 			}
 
 			@Override
-			public void onTextMessage(final WebSocket websocket, final String text) {
-				log(TAG);
-				log("  onTextMessage");
-				log("    payload == "+text);
-
-				handleMessage(text);
+			public void onFailure(WebSocket webSocket, Throwable t, Response response) {
+				super.onFailure(webSocket, t, response);
+				mCallbackProxy.onException(new Exception(t));
 			}
-
-			@Override
-			public void onStateChanged(final WebSocket websocket, final WebSocketState newState) {}
-
-			@Override
-			public void handleCallbackError(final WebSocket websocket, final Throwable cause) {
-				mCallbackProxy.onException(new Exception(cause));
-			}
-
-			@Override
-			public void onError(final WebSocket websocket, final WebSocketException cause) {
-				mCallbackProxy.onException(new Exception(cause));
-			}
-
 		};
 
 		// create a map that holds the pending Listener instances
@@ -312,18 +307,14 @@ public class Meteor {
 			}
 		}
 
-		// create a new WebSocket connection for the data transfer
-		try {
-			mWebSocket = new WebSocketFactory().setConnectionTimeout(30000).createSocket(mServerUri);
-		}
-		catch (final IOException e) {
-			mCallbackProxy.onException(e);
-		}
+		OkHttpClient client = new OkHttpClient.Builder()
+				.readTimeout(30000, TimeUnit.MILLISECONDS)
+				.pingInterval(25 * 1000, TimeUnit.MICROSECONDS)
+				.build();
 
-		mWebSocket.setMissingCloseFrameAllowed(true);
-		mWebSocket.setPingInterval(25 * 1000);
-		mWebSocket.addListener(mWebSocketListener);
-		mWebSocket.connectAsynchronously();
+		Request request = new Request.Builder().url(mServerUri).build();
+
+		mWebSocket = client.newWebSocket(request, mWebSocketListener);
 	}
 
 	/**
@@ -352,12 +343,7 @@ public class Meteor {
 		mSessionID = null;
 
 		if (mWebSocket != null) {
-			try {
-				mWebSocket.disconnect();
-			}
-			catch (Exception e) {
-				mCallbackProxy.onException(e);
-			}
+			mWebSocket.cancel();
 		}
 		else {
 			throw new IllegalStateException("You must have called the 'connect' method before you can disconnect again");
@@ -399,7 +385,7 @@ public class Meteor {
 			log("    dispatching");
 
 			if (mWebSocket != null) {
-				mWebSocket.sendText(message);
+				mWebSocket.send(message);
 			}
 			else {
 				throw new IllegalStateException("You must have called the 'connect' method before you can send data");

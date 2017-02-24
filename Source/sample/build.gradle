@@ -18,6 +18,10 @@ android {
     }
 }
 
+repositories {
+	maven { url 'https://jitpack.io' }
+}
+
 dependencies {
-    compile project(':library')
+	compile 'com.github.tomykho:android-ddp:0.1.0'
 }
