@@ -1,4 +1,4 @@
-# Android-DDP
+# Android-DDP (GSON)
 
 This library implements the [Distributed Data Protocol](https://www.meteor.com/ddp) (DDP) from Meteor for clients on Android.
 
